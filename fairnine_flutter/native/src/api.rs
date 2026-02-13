@@ -2,14 +2,23 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
+use std::fs;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use whisper_rs::{WhisperContext, FullParams, SamplingStrategy};
 use flutter_rust_bridge::StreamSink;
 use anyhow::{Result, Context, anyhow};
 use lazy_static::lazy_static;
 
-const APP_VERSION: &str = "1.0.0";
+const APP_VERSION: &str = "1.2.0";
 const GITHUB_REPO: &str = "open-free-launching/Fair9";
+
+/// Voice Snippet: trigger phrase → expanded content
+#[derive(Clone, Debug)]
+pub struct VoiceSnippet {
+    pub trigger: String,
+    pub content: String,
+}
+
 
 // Constants
 const VAD_THRESHOLD_RMS: f32 = 0.01; // Adjust based on mic sensitivity
@@ -29,6 +38,7 @@ lazy_static! {
         audio_buffer: Mutex::new(Vec::new()),
         model_ctx: Mutex::new(None),
     });
+    static ref SNIPPETS: Mutex<Vec<VoiceSnippet>> = Mutex::new(Vec::new());
 }
 
 fn get_model_path() -> Result<PathBuf> {
@@ -81,6 +91,174 @@ pub fn clean_filler_words(text: &str) -> String {
     }
     // Collapse multiple spaces and trim
     result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// VOICE SNIPPET LIBRARY
+// ═══════════════════════════════════════════════════════════════════
+
+/// Get the snippets.json file path
+fn get_snippets_path() -> Result<PathBuf> {
+    let mut path = dirs::data_dir().ok_or_else(|| anyhow!("Could not find data directory"))?;
+    path.push("OpenFL");
+    path.push("Fair9");
+    path.push("snippets.json");
+    Ok(path)
+}
+
+/// Load snippets from disk into the global store
+pub fn load_snippets() -> Result<String> {
+    let path = get_snippets_path()?;
+    if !path.exists() {
+        // Create default snippets file
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let default = r#"{"snippets": []}"#;
+        fs::write(&path, default)?;
+        return Ok("Created empty snippets file".to_string());
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let mut snippets = Vec::new();
+
+    // Simple JSON parsing for snippets array
+    // Format: {"snippets": [{"trigger": "...", "content": "..."}, ...]}
+    if let Some(arr_start) = content.find('[') {
+        if let Some(arr_end) = content.rfind(']') {
+            let arr_str = &content[arr_start+1..arr_end];
+            // Split by "},{" pattern to get individual objects
+            let mut depth = 0;
+            let mut obj_start = None;
+            for (i, ch) in arr_str.char_indices() {
+                match ch {
+                    '{' => {
+                        if depth == 0 { obj_start = Some(i); }
+                        depth += 1;
+                    }
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            if let Some(start) = obj_start {
+                                let obj = &arr_str[start..=i];
+                                if let (Some(trigger), Some(content)) = (extract_json_string(obj, "trigger"), extract_json_string(obj, "content")) {
+                                    snippets.push(VoiceSnippet { trigger, content });
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let count = snippets.len();
+    *SNIPPETS.lock().unwrap() = snippets;
+    Ok(format!("Loaded {} snippets", count))
+}
+
+/// Extract a string value from a JSON object by key (minimal parser)
+fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let pattern = format!("\"{}\"\\s*:\\s*\"", key);
+    // Simple find-based extraction
+    let search = format!("\"{}\":", key);
+    let alt_search = format!("\"{}\" :", key);
+    let pos = json.find(&search).or_else(|| json.find(&alt_search))?;
+    let after_key = &json[pos..];
+    // Find the opening quote of the value
+    let first_colon = after_key.find(':')?;
+    let after_colon = &after_key[first_colon+1..].trim_start();
+    if !after_colon.starts_with('"') { return None; }
+    let value_start = 1; // skip opening quote
+    let value_str = &after_colon[value_start..];
+    // Find closing quote (handle escaped quotes)
+    let mut end = 0;
+    let mut escaped = false;
+    for ch in value_str.chars() {
+        if escaped {
+            escaped = false;
+            end += ch.len_utf8();
+            continue;
+        }
+        if ch == '\\' { escaped = true; end += 1; continue; }
+        if ch == '"' { break; }
+        end += ch.len_utf8();
+    }
+    Some(value_str[..end].replace("\\n", "\n").replace("\\\"", "\""))
+}
+
+/// Check if transcribed text matches any snippet trigger
+pub fn match_snippet(text: &str) -> Option<String> {
+    let normalized = text.trim().to_lowercase();
+    let store = SNIPPETS.lock().unwrap();
+    for snippet in store.iter() {
+        if normalized == snippet.trigger.to_lowercase() ||
+           normalized.ends_with(&snippet.trigger.to_lowercase()) {
+            return Some(snippet.content.clone());
+        }
+    }
+    None
+}
+
+/// Add a new snippet
+pub fn add_snippet(trigger: String, content: String) -> Result<String> {
+    {
+        let mut store = SNIPPETS.lock().unwrap();
+        // Check for duplicate trigger
+        if store.iter().any(|s| s.trigger.to_lowercase() == trigger.to_lowercase()) {
+            return Err(anyhow!("Snippet with trigger '{}' already exists", trigger));
+        }
+        store.push(VoiceSnippet { trigger: trigger.clone(), content });
+    }
+    save_snippets()?;
+    Ok(format!("Added snippet '{}'", trigger))
+}
+
+/// Remove a snippet by trigger
+pub fn remove_snippet(trigger: String) -> Result<String> {
+    {
+        let mut store = SNIPPETS.lock().unwrap();
+        let before = store.len();
+        store.retain(|s| s.trigger.to_lowercase() != trigger.to_lowercase());
+        if store.len() == before {
+            return Err(anyhow!("No snippet with trigger '{}'", trigger));
+        }
+    }
+    save_snippets()?;
+    Ok(format!("Removed snippet '{}'", trigger))
+}
+
+/// Get all snippets as a JSON string
+pub fn get_snippets() -> String {
+    let store = SNIPPETS.lock().unwrap();
+    let entries: Vec<String> = store.iter().map(|s| {
+        format!("{{\"trigger\":\"{}\",\"content\":\"{}\"}}",
+            s.trigger.replace('"', "\\\""),
+            s.content.replace('"', "\\\"").replace('\n', "\\n")
+        )
+    }).collect();
+    format!("{{\"snippets\":[{}]}}", entries.join(","))
+}
+
+/// Save current snippets to disk
+fn save_snippets() -> Result<()> {
+    let path = get_snippets_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let json = get_snippets();
+    fs::write(&path, &json)?;
+    Ok(())
+}
+
+/// Process text through snippet matching (called after filler removal)
+/// Returns either the snippet content or the original text
+pub fn apply_snippet_expansion(text: &str) -> String {
+    match match_snippet(text) {
+        Some(content) => content,
+        None => text.to_string(),
+    }
 }
 
 pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
@@ -176,11 +354,13 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
                                      }
                                  }
                                  
-                                 // Simple VAD indicator
+                                 // Pipeline: raw → filler removal → snippet expansion
+                                 let cleaned = clean_filler_words(&text);
+                                 let final_text = apply_snippet_expansion(&cleaned);
                                  if is_speaking {
-                                     sink.add(clean_filler_words(&text));
+                                     sink.add(final_text);
                                  } else {
-                                     sink.add(clean_filler_words(&text));
+                                     sink.add(apply_snippet_expansion(&clean_filler_words(&text)));
                                  }
                              }
                          }
@@ -297,7 +477,8 @@ pub fn stop_and_transcribe() -> Result<String> {
                             text.push_str(&segment);
                         }
                     }
-                    return Ok(clean_filler_words(&text.trim().to_string()));
+                    let cleaned = clean_filler_words(&text.trim().to_string());
+                    return Ok(apply_snippet_expansion(&cleaned));
                 }
             }
         }
@@ -448,5 +629,61 @@ mod tests {
         let input = "";
         let result = clean_filler_words(input);
         assert_eq!(result, "");
+    }
+
+    // ══ Snippet Tests ══════════════════════════════════════════════
+    #[test]
+    fn test_snippet_match_exact() {
+        // Manually add a snippet to the store
+        {
+            let mut store = SNIPPETS.lock().unwrap();
+            store.push(VoiceSnippet {
+                trigger: "insert bio".to_string(),
+                content: "I am a software engineer...".to_string(),
+            });
+        }
+        let result = match_snippet("insert bio");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "I am a software engineer...");
+        // Cleanup
+        SNIPPETS.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn test_snippet_match_case_insensitive() {
+        {
+            let mut store = SNIPPETS.lock().unwrap();
+            store.push(VoiceSnippet {
+                trigger: "Insert Bio".to_string(),
+                content: "Bio content here".to_string(),
+            });
+        }
+        let result = match_snippet("INSERT BIO");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), "Bio content here");
+        SNIPPETS.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn test_snippet_no_match() {
+        {
+            let mut store = SNIPPETS.lock().unwrap();
+            store.push(VoiceSnippet {
+                trigger: "insert bio".to_string(),
+                content: "Bio content here".to_string(),
+            });
+        }
+        let result = match_snippet("hello world");
+        assert!(result.is_none());
+        SNIPPETS.lock().unwrap().clear();
+    }
+
+    #[test]
+    fn test_extract_json_string() {
+        let json = r#"{"trigger":"insert bio","content":"Hello world"}"#;
+        let trigger = extract_json_string(json, "trigger");
+        let content = extract_json_string(json, "content");
+        assert_eq!(trigger.unwrap(), "insert bio");
+        assert_eq!(content.unwrap(), "Hello world");
     }
 }

@@ -1,0 +1,20 @@
+{
+  "snippets": [
+    {
+      "trigger": "insert bio",
+      "content": "I am a full-stack software engineer with 8+ years of experience building scalable web applications and distributed systems. I specialize in React, TypeScript, Rust, and cloud-native architectures.\n\nPreviously, I led engineering teams at two Y Combinator startups, shipping products used by over 500,000 developers worldwide. I'm passionate about developer tooling, performance optimization, and open-source contributions.\n\nWhen I'm not coding, you'll find me mentoring junior developers, speaking at tech conferences, or experimenting with new programming languages. I believe great software is built at the intersection of empathy and engineering rigor."
+    },
+    {
+      "trigger": "insert email sign off",
+      "content": "Best regards,\n\nFeel free to reach out if you have any questions or need further clarification. I'm happy to schedule a follow-up call at your convenience.\n\nWarm regards"
+    },
+    {
+      "trigger": "insert meeting template",
+      "content": "Meeting Notes\n\nDate: [TODAY]\nAttendees:\nAgenda:\n\n1. Review action items from last meeting\n2. Status updates\n3. Blockers and dependencies\n4. Next steps\n\nAction Items:\n- [ ] \n- [ ] \n- [ ] \n\nNext Meeting:"
+    },
+    {
+      "trigger": "insert code review",
+      "content": "Code Review Feedback\n\nOverall: Looks good! A few suggestions below.\n\nStrengths:\n- Clean separation of concerns\n- Good test coverage\n- Clear naming conventions\n\nSuggestions:\n- Consider extracting the helper logic into a utility module\n- Add error handling for edge cases\n- Update the README with the new API changes\n\nApproved with minor changes."
+    }
+  ]
+}

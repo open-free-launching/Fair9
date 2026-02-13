@@ -228,6 +228,14 @@ class _HUDOverlayState extends State<HUDOverlay>
   // Model downloads
   Map<int, double> _downloadProgress = {};
 
+  // Snippets
+  List<Map<String, String>> _snippets = [];
+  int _settingsTabIndex = 0; // 0=Settings, 1=Snippets
+  final TextEditingController _triggerController = TextEditingController();
+  final TextEditingController _contentController = TextEditingController();
+  bool _showAddSnippet = false;
+  String? _snippetExpandedTo; // shows which snippet was triggered
+
   final StreamController<String> _mockStreamController = StreamController<String>.broadcast();
   Stream<String>? _transcriptionStream;
 
@@ -264,6 +272,8 @@ class _HUDOverlayState extends State<HUDOverlay>
     );
 
     _transcriptionStream = _mockStreamController.stream;
+
+    _loadSnippets();
   }
 
   Future<void> _checkForUpdates() async {
@@ -294,6 +304,8 @@ class _HUDOverlayState extends State<HUDOverlay>
     _ghostFadeController.dispose();
     _settingsSlideController.dispose();
     _mockStreamController.close();
+    _triggerController.dispose();
+    _contentController.dispose();
     super.dispose();
   }
 
@@ -333,7 +345,7 @@ class _HUDOverlayState extends State<HUDOverlay>
     setState(() => _settingsOpen = !_settingsOpen);
     if (_settingsOpen) {
       _settingsSlideController.forward();
-      windowManager.setSize(const Size(380, 520));
+      windowManager.setSize(const Size(380, 580));
       windowManager.setIgnoreMouseEvents(false); // Make interactive
     } else {
       _settingsSlideController.reverse();
@@ -463,6 +475,75 @@ class _HUDOverlayState extends State<HUDOverlay>
       _downloadProgress.remove(index);
       _activeModelIndex = index;
       _activeModelName = model['name']!;
+    });
+  }
+
+  // ── Snippets CRUD ─────────────────────────────────────────────────
+  Future<void> _loadSnippets() async {
+    try {
+      final directory = await getApplicationSupportDirectory();
+      final snippetFile = File('${directory.parent.path}\\OpenFL\\Fair9\\snippets.json');
+      if (await snippetFile.exists()) {
+        final content = await snippetFile.readAsString();
+        final data = json.decode(content);
+        final list = data['snippets'] as List? ?? [];
+        setState(() {
+          _snippets = list.map<Map<String, String>>((s) => {
+            'trigger': s['trigger']?.toString() ?? '',
+            'content': s['content']?.toString() ?? '',
+          }).toList();
+        });
+      } else {
+        // Copy built-in defaults on first run
+        await _saveSnippets();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveSnippets() async {
+    try {
+      final directory = await getApplicationSupportDirectory();
+      final dir = Directory('${directory.parent.path}\\OpenFL\\Fair9');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final file = File('${dir.path}\\snippets.json');
+      final data = {'snippets': _snippets};
+      await file.writeAsString(json.encode(data));
+    } catch (_) {}
+  }
+
+  void _addSnippet() {
+    final trigger = _triggerController.text.trim();
+    final content = _contentController.text.trim();
+    if (trigger.isEmpty || content.isEmpty) return;
+
+    // Check for duplicate
+    if (_snippets.any((s) => s['trigger']!.toLowerCase() == trigger.toLowerCase())) {
+      setState(() => _status = "Duplicate trigger '\'$trigger'\''");
+      return;
+    }
+
+    setState(() {
+      _snippets.add({'trigger': trigger, 'content': content});
+      _triggerController.clear();
+      _contentController.clear();
+      _showAddSnippet = false;
+      _status = "Snippet '\'$trigger'\'' added ✓";
+    });
+    _saveSnippets();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _status = "Ready");
+    });
+  }
+
+  void _removeSnippet(int index) {
+    final trigger = _snippets[index]['trigger'];
+    setState(() {
+      _snippets.removeAt(index);
+      _status = "Removed '\'$trigger'\'' ✓";
+    });
+    _saveSnippets();
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _status = "Ready");
     });
   }
 
@@ -712,7 +793,7 @@ class _HUDOverlayState extends State<HUDOverlay>
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // GLASS SETTINGS PANEL (expandable)
+  // GLASS SETTINGS PANEL (tabbed: Settings | Snippets)
   // ═══════════════════════════════════════════════════════════════
   Widget _buildSettingsPanel() {
     return Padding(
@@ -733,9 +814,7 @@ class _HUDOverlayState extends State<HUDOverlay>
               border: Border.all(color: Colors.white.withOpacity(0.08)),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // ── MODE TOGGLE ────────────────────────────
-              Text('Transcription Mode', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-              const SizedBox(height: 8),
+              // ── TAB BAR ─────────────────────────────────
               Container(
                 decoration: BoxDecoration(
                   color: Colors.white.withOpacity(0.04),
@@ -743,79 +822,232 @@ class _HUDOverlayState extends State<HUDOverlay>
                 ),
                 child: Row(children: [
                   _ModeTab(
-                    label: 'Batch',
-                    icon: CupertinoIcons.recordingtape,
-                    isActive: _sttMode == STTMode.batch,
-                    onTap: () => setState(() => _sttMode = STTMode.batch),
+                    label: 'Settings',
+                    icon: CupertinoIcons.gear_alt,
+                    isActive: _settingsTabIndex == 0,
+                    onTap: () => setState(() => _settingsTabIndex = 0),
                   ),
                   _ModeTab(
-                    label: 'Live Stream',
-                    icon: CupertinoIcons.waveform,
-                    isActive: _sttMode == STTMode.streaming,
-                    onTap: () => setState(() => _sttMode = STTMode.streaming),
+                    label: 'Snippets',
+                    icon: CupertinoIcons.text_quote,
+                    isActive: _settingsTabIndex == 1,
+                    onTap: () => setState(() => _settingsTabIndex = 1),
                   ),
                 ]),
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 12),
 
-              // ── LEGACY MODE ────────────────────────────
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text('Legacy App Compatibility', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10)),
-                SizedBox(
-                  height: 22,
-                  child: CupertinoSwitch(
-                    value: _legacyAppMode,
-                    onChanged: (v) => setState(() => _legacyAppMode = v),
-                    activeTrackColor: kNeonPurple,
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 14),
-
-              // ── MODEL SELECTOR ─────────────────────────
-              Text('Models', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
-              const SizedBox(height: 8),
-              ...List.generate(kAvailableModels.length, (i) {
-                final model = kAvailableModels[i];
-                final isActive = i == _activeModelIndex;
-                final isDownloading = _downloadProgress.containsKey(i);
-                return _ModelRow(
-                  name: model['name']!,
-                  size: model['size']!,
-                  isActive: isActive,
-                  isDownloading: isDownloading,
-                  progress: _downloadProgress[i] ?? 0,
-                  onTap: isActive ? null : () => _downloadModel(i),
-                );
-              }),
-
-              const SizedBox(height: 10),
-              // ── CUSTOM MODEL ───────────────────────────
-              GestureDetector(
-                onTap: () {
-                  // In production: open file picker for custom .bin
-                  setState(() => _status = "File picker not available in mock mode");
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.white.withOpacity(0.06), style: BorderStyle.solid),
-                    color: Colors.white.withOpacity(0.02),
-                  ),
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    Icon(CupertinoIcons.folder_open, color: Colors.white.withOpacity(0.25), size: 14),
-                    const SizedBox(width: 6),
-                    Text('Load Custom .bin Model', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 11)),
-                  ]),
-                ),
-              ),
+              // ── TAB CONTENT ─────────────────────────────
+              if (_settingsTabIndex == 0) _buildSettingsTab(),
+              if (_settingsTabIndex == 1) _buildSnippetsTab(),
             ]),
           ),
         ),
       ),
     );
+  }
+
+  // ── Settings Tab ──────────────────────────────────────────────
+  Widget _buildSettingsTab() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // MODE TOGGLE
+      Text('Transcription Mode', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+      const SizedBox(height: 8),
+      Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.04),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(children: [
+          _ModeTab(
+            label: 'Batch',
+            icon: CupertinoIcons.recordingtape,
+            isActive: _sttMode == STTMode.batch,
+            onTap: () => setState(() => _sttMode = STTMode.batch),
+          ),
+          _ModeTab(
+            label: 'Live Stream',
+            icon: CupertinoIcons.waveform,
+            isActive: _sttMode == STTMode.streaming,
+            onTap: () => setState(() => _sttMode = STTMode.streaming),
+          ),
+        ]),
+      ),
+      const SizedBox(height: 14),
+
+      // LEGACY MODE
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('Legacy App Compatibility', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10)),
+        SizedBox(
+          height: 22,
+          child: CupertinoSwitch(
+            value: _legacyAppMode,
+            onChanged: (v) => setState(() => _legacyAppMode = v),
+            activeTrackColor: kNeonPurple,
+          ),
+        ),
+      ]),
+      const SizedBox(height: 14),
+
+      // MODEL SELECTOR
+      Text('Models', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+      const SizedBox(height: 8),
+      ...List.generate(kAvailableModels.length, (i) {
+        final model = kAvailableModels[i];
+        final isActive = i == _activeModelIndex;
+        final isDownloading = _downloadProgress.containsKey(i);
+        return _ModelRow(
+          name: model['name']!,
+          size: model['size']!,
+          isActive: isActive,
+          isDownloading: isDownloading,
+          progress: _downloadProgress[i] ?? 0,
+          onTap: isActive ? null : () => _downloadModel(i),
+        );
+      }),
+
+      const SizedBox(height: 10),
+      // CUSTOM MODEL
+      GestureDetector(
+        onTap: () {
+          setState(() => _status = "File picker not available in mock mode");
+        },
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withOpacity(0.06)),
+            color: Colors.white.withOpacity(0.02),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(CupertinoIcons.folder_open, color: Colors.white.withOpacity(0.25), size: 14),
+            const SizedBox(width: 6),
+            Text('Load Custom .bin Model', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 11)),
+          ]),
+        ),
+      ),
+    ]);
+  }
+
+  // ── Snippets Tab ──────────────────────────────────────────────
+  Widget _buildSnippetsTab() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // Header row
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('Voice Snippets', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+        Row(children: [
+          Text('${_snippets.length}', style: TextStyle(color: kNeonPurple.withOpacity(0.5), fontSize: 10)),
+          const SizedBox(width: 8),
+          GestureDetector(
+            onTap: () => setState(() => _showAddSnippet = !_showAddSnippet),
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: kNeonPurple.withOpacity(_showAddSnippet ? 0.2 : 0.1),
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: kNeonPurple.withOpacity(0.3)),
+              ),
+              child: Icon(
+                _showAddSnippet ? CupertinoIcons.xmark : CupertinoIcons.plus,
+                size: 11, color: kNeonPurple,
+              ),
+            ),
+          ),
+        ]),
+      ]),
+      const SizedBox(height: 8),
+
+      // ── Add Snippet Form ────────────────────────────
+      if (_showAddSnippet) ...[
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: kNeonPurple.withOpacity(0.06),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: kNeonPurple.withOpacity(0.15)),
+          ),
+          child: Column(children: [
+            _SnippetTextField(
+              controller: _triggerController,
+              hint: 'Trigger phrase (e.g. "insert bio")',
+              icon: CupertinoIcons.mic,
+            ),
+            const SizedBox(height: 8),
+            _SnippetTextField(
+              controller: _contentController,
+              hint: 'Content to expand into...',
+              icon: CupertinoIcons.doc_text,
+              maxLines: 3,
+            ),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: _addSnippet,
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 7),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [kNeonPurple, kNeonTeal]),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Center(child: Text('Add Snippet', style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600))),
+              ),
+            ),
+          ]),
+        ),
+        const SizedBox(height: 8),
+      ],
+
+      // ── Snippet List ────────────────────────────────
+      if (_snippets.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Center(child: Column(children: [
+            Icon(CupertinoIcons.text_quote, color: Colors.white.withOpacity(0.08), size: 28),
+            const SizedBox(height: 8),
+            Text('No snippets yet', style: TextStyle(color: Colors.white.withOpacity(0.15), fontSize: 11)),
+            Text('Tap + to add your first voice shortcut', style: TextStyle(color: Colors.white.withOpacity(0.08), fontSize: 10)),
+          ])),
+        ),
+
+      ...List.generate(_snippets.length, (i) {
+        final snippet = _snippets[i];
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 5),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.05)),
+            ),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Icon(CupertinoIcons.text_quote, size: 12, color: kNeonTeal.withOpacity(0.5)),
+              const SizedBox(width: 8),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(
+                  '"${snippet['trigger']}"',
+                  style: TextStyle(color: kNeonPurple.withOpacity(0.8), fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  snippet['content']!.length > 60
+                      ? '${snippet['content']!.substring(0, 60)}...'
+                      : snippet['content']!,
+                  style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 10),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ])),
+              GestureDetector(
+                onTap: () => _removeSnippet(i),
+                child: Icon(CupertinoIcons.trash, size: 12, color: Colors.white.withOpacity(0.15)),
+              ),
+            ]),
+          ),
+        );
+      }),
+    ]);
   }
 
   // ── Ghost Text Area (Streaming) ──────────────────────────────
@@ -980,6 +1212,39 @@ class _ModelRow extends StatelessWidget {
               ),
             ],
           ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _SnippetTextField extends StatelessWidget {
+  final TextEditingController controller;
+  final String hint;
+  final IconData icon;
+  final int maxLines;
+  const _SnippetTextField({required this.controller, required this.hint, required this.icon, this.maxLines = 1});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+      ),
+      child: TextField(
+        controller: controller,
+        maxLines: maxLines,
+        style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 11),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: TextStyle(color: Colors.white.withOpacity(0.15), fontSize: 11),
+          prefixIcon: Icon(icon, size: 13, color: Colors.white.withOpacity(0.2)),
+          prefixIconConstraints: const BoxConstraints(minWidth: 30),
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          isDense: true,
         ),
       ),
     );
