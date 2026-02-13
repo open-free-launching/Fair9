@@ -1,0 +1,112 @@
+name: Build & Release Fair9
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  FLUTTER_VERSION: '3.32.0'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: Fair9_Setup.exe
+            build_cmd: flutter build windows --release
+            output_path: build/windows/x64/runner/Release/
+          - os: macos-latest
+            artifact: Fair9.dmg
+            build_cmd: flutter build macos --release
+            output_path: build/macos/Build/Products/Release/
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: fairnine_flutter
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build
+        run: ${{ matrix.build_cmd }}
+
+      # --- Windows: Package with Inno Setup ---
+      - name: Package Windows Installer
+        if: runner.os == 'Windows'
+        run: |
+          choco install innosetup -y
+          iscc setup_fair9.iss
+        shell: cmd
+
+      - name: Upload Windows Artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: fairnine_flutter/installer/Fair9_Setup_v1.1.exe
+
+      # --- macOS: Create DMG ---
+      - name: Package macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "Fair9" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --app-drop-link 450 185 \
+            "Fair9_${{ github.ref_name }}.dmg" \
+            "${{ matrix.output_path }}"
+
+      - name: Upload macOS Artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: fairnine_flutter/Fair9_*.dmg
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-release
+          path: release/
+
+      - name: Download macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-release
+          path: release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Fair9 ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
