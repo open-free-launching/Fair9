@@ -37,6 +37,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install LLVM (Windows)
+        if: runner.os == 'Windows'
+        run: choco install llvm -y
+
+      - name: Install LLVM (macOS)
+        if: runner.os == 'macOS'
+        run: brew install llvm
+
+      - name: Install flutter_rust_bridge_codegen
+        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
+
       - name: Enable macOS Desktop Support
         if: runner.os == 'macOS'
         run: |
@@ -45,6 +56,15 @@ jobs:
 
       - name: Install Dependencies
         run: flutter pub get
+
+      - name: Run Codegen
+        run: |
+          mkdir -p lib
+          mkdir -p native/src
+          flutter_rust_bridge_codegen \
+            --rust-input native/src/api.rs \
+            --dart-output lib/bridge_generated.dart \
+            --rust-output native/src/bridge_generated.rs
 
       - name: Build
         run: ${{ matrix.build_cmd }}
