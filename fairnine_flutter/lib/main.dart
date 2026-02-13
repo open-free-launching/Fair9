@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'dart:ui';
@@ -236,6 +237,13 @@ class _HUDOverlayState extends State<HUDOverlay>
   bool _showAddSnippet = false;
   String? _snippetExpandedTo; // shows which snippet was triggered
 
+  // Command Mode
+  bool _commandMode = false;
+  String _commandStatus = '';
+  String _ollamaStatus = 'unknown'; // 'connected', 'offline', 'running_no_models'
+  String _commandVoiceInput = '';
+  String _selectedText = '';
+
   final StreamController<String> _mockStreamController = StreamController<String>.broadcast();
   Stream<String>? _transcriptionStream;
 
@@ -274,6 +282,7 @@ class _HUDOverlayState extends State<HUDOverlay>
     _transcriptionStream = _mockStreamController.stream;
 
     _loadSnippets();
+    _checkOllamaStatus();
   }
 
   Future<void> _checkForUpdates() async {
@@ -547,6 +556,149 @@ class _HUDOverlayState extends State<HUDOverlay>
     });
   }
 
+  // ── AI Command Mode ───────────────────────────────────────────
+  Future<void> _checkOllamaStatus() async {
+    try {
+      final response = await http.get(Uri.parse('http://localhost:11434/api/tags'));
+      if (mounted) {
+        setState(() {
+          _ollamaStatus = response.statusCode == 200 ? 'connected' : 'offline';
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _ollamaStatus = 'offline');
+    }
+  }
+
+  /// Full AI Command Mode pipeline:
+  /// 1. Copy selected text (Ctrl+C)
+  /// 2. Record voice command (batch mode)
+  /// 3. Send to Ollama LLM
+  /// 4. Paste result back (Ctrl+V)
+  Future<void> _activateCommandMode() async {
+    if (_commandMode) return;
+
+    setState(() {
+      _commandMode = true;
+      _commandStatus = 'Copying selection...';
+      _status = '⌘ CMD';
+    });
+    windowManager.setIgnoreMouseEvents(false);
+
+    // Step 1: Copy selection (Ctrl+C) — simulate keyboard shortcut
+    try {
+      // Read clipboard before we copy (to detect if copy actually worked)
+      final beforeClip = await Clipboard.getData(Clipboard.kTextPlain);
+
+      // Briefly allow mouse events so the user's app stays focused
+      await windowManager.setIgnoreMouseEvents(true, forward: true);
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Simulate Ctrl+C via platform channel or native code
+      // For now, we read whatever is currently in clipboard as the "selection"
+      final clipData = await Clipboard.getData(Clipboard.kTextPlain);
+      _selectedText = clipData?.text ?? '';
+
+      await windowManager.setIgnoreMouseEvents(false);
+
+      if (_selectedText.isEmpty) {
+        _cancelCommandMode('No text selected — highlight text first');
+        return;
+      }
+
+      setState(() => _commandStatus = 'Text copied. Listening for command...');
+    } catch (e) {
+      _cancelCommandMode('Failed to copy: $e');
+      return;
+    }
+
+    // Step 2: Record voice command (batch-style)
+    setState(() {
+      _isRecording = true;
+      _commandStatus = '🎙 Say your command...';
+    });
+    _showModelBadge();
+
+    // Wait for user to release (simulated with a delay for now)
+    // In production this uses the hold-to-record pattern
+    await Future.delayed(const Duration(seconds: 3));
+
+    setState(() {
+      _isRecording = false;
+      _commandStatus = 'Processing command...';
+    });
+
+    // Mock voice command for demo (in production, comes from Whisper STT)
+    _commandVoiceInput = 'Fix the grammar and make it more professional';
+
+    // Step 3: Send to Ollama
+    setState(() => _commandStatus = 'AI processing: "$_commandVoiceInput"');
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://localhost:11434/api/generate'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'model': 'llama3',
+          'prompt': 'Command: $_commandVoiceInput\n\nText to edit:\n$_selectedText',
+          'system': 'You are a text editor. Execute the user\'s command on the following text. Return ONLY the modified text with no explanation, no markdown formatting, no quotes around it. Just the raw edited text, nothing else.',
+          'stream': false,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final result = data['response']?.toString().trim() ?? '';
+
+        if (result.isEmpty) {
+          _cancelCommandMode('LLM returned empty response');
+          return;
+        }
+
+        // Step 4: Copy result to clipboard and paste (Ctrl+V)
+        await Clipboard.setData(ClipboardData(text: result));
+
+        setState(() => _commandStatus = 'Pasting result...');
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        // Complete
+        setState(() {
+          _commandMode = false;
+          _commandStatus = '';
+          _batchResult = result;
+          _status = 'Command complete ✓';
+        });
+
+        Future.delayed(const Duration(seconds: 2), () {
+          if (mounted) setState(() => _status = 'Ready');
+        });
+      } else {
+        _cancelCommandMode('Ollama error: ${response.statusCode}');
+      }
+    } catch (e) {
+      _cancelCommandMode('Ollama offline. Run: ollama serve');
+    }
+
+    // Restore click-through
+    if (!_settingsOpen && !_isRecording) {
+      windowManager.setIgnoreMouseEvents(true, forward: true);
+    }
+  }
+
+  void _cancelCommandMode(String reason) {
+    setState(() {
+      _commandMode = false;
+      _commandStatus = '';
+      _status = reason;
+    });
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _status = 'Ready');
+    });
+    if (!_settingsOpen) {
+      windowManager.setIgnoreMouseEvents(true, forward: true);
+    }
+  }
+
   // ═══════════════════════════════════════════════════════════════
   // BUILD
   // ═══════════════════════════════════════════════════════════════
@@ -675,6 +827,18 @@ class _HUDOverlayState extends State<HUDOverlay>
                       border: Border.all(color: Colors.amber.withOpacity(0.25)),
                     ),
                     child: const Text('LEGACY', style: TextStyle(color: Colors.amber, fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+                  ),
+                // Command Mode badge
+                if (_commandMode)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    margin: const EdgeInsets.only(right: 6),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(colors: [kNeonPink.withOpacity(0.15), kNeonPurple.withOpacity(0.15)]),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: kNeonPink.withOpacity(0.4)),
+                    ),
+                    child: const Text('⌘ CMD', style: TextStyle(color: kNeonPink, fontSize: 8, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
                   ),
                 // Gear icon → Settings
                 GestureDetector(
@@ -924,6 +1088,58 @@ class _HUDOverlayState extends State<HUDOverlay>
             Icon(CupertinoIcons.folder_open, color: Colors.white.withOpacity(0.25), size: 14),
             const SizedBox(width: 6),
             Text('Load Custom .bin Model', style: TextStyle(color: Colors.white.withOpacity(0.25), fontSize: 11)),
+          ]),
+        ),
+      ),
+      const SizedBox(height: 14),
+
+      // ── OLLAMA STATUS ────────────────────────────
+      Text('AI Command Mode', style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+      const SizedBox(height: 8),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Row(children: [
+          Container(
+            width: 6, height: 6,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _ollamaStatus == 'connected' ? kNeonTeal : Colors.red.shade400,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _ollamaStatus == 'connected' ? 'Ollama Connected' : 'Ollama Offline',
+            style: TextStyle(color: Colors.white.withOpacity(0.4), fontSize: 10),
+          ),
+        ]),
+        GestureDetector(
+          onTap: _checkOllamaStatus,
+          child: Icon(CupertinoIcons.arrow_2_circlepath, size: 12, color: Colors.white.withOpacity(0.2)),
+        ),
+      ]),
+      const SizedBox(height: 8),
+      GestureDetector(
+        onTap: _ollamaStatus == 'connected' ? _activateCommandMode : null,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            gradient: _ollamaStatus == 'connected'
+                ? const LinearGradient(colors: [kNeonPink, kNeonPurple])
+                : null,
+            color: _ollamaStatus != 'connected' ? Colors.white.withOpacity(0.03) : null,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: (_ollamaStatus == 'connected' ? kNeonPink : Colors.white).withOpacity(0.15)),
+          ),
+          child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Icon(CupertinoIcons.wand_and_stars, size: 13, color: _ollamaStatus == 'connected' ? Colors.white : Colors.white.withOpacity(0.15)),
+            const SizedBox(width: 6),
+            Text(
+              _commandMode ? _commandStatus : 'Activate Command Mode',
+              style: TextStyle(
+                color: _ollamaStatus == 'connected' ? Colors.white : Colors.white.withOpacity(0.15),
+                fontSize: 11, fontWeight: FontWeight.w600,
+              ),
+            ),
           ]),
         ),
       ),

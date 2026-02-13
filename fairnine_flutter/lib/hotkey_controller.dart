@@ -110,3 +110,79 @@ class TextInjector {
 
   void clearBuffer() => _buffer.clear();
 }
+
+/// Manages the AI Command Mode pipeline:
+/// 1. Copy selected text (Ctrl+C)
+/// 2. Record voice command
+/// 3. Send (text + command) to LLM
+/// 4. Paste result back (Ctrl+V)
+enum CommandState { idle, copying, recording, processing, pasting }
+
+class CommandHotkeyController {
+  final Duration debounceDuration;
+  final void Function(CommandState state, String message) onStateChange;
+
+  CommandState _state = CommandState.idle;
+  DateTime? _lastActivation;
+
+  CommandState get state => _state;
+
+  CommandHotkeyController({
+    this.debounceDuration = const Duration(milliseconds: 300),
+    required this.onStateChange,
+  });
+
+  /// Called when Shift+CapsLock is pressed.
+  /// Returns true if the command mode activation was accepted.
+  bool activate() {
+    final now = DateTime.now();
+
+    // Debounce
+    if (_lastActivation != null &&
+        now.difference(_lastActivation!) < debounceDuration) {
+      return false;
+    }
+
+    if (_state != CommandState.idle) return false;
+
+    _lastActivation = now;
+    _state = CommandState.copying;
+    onStateChange(_state, 'Copying selection...');
+    return true;
+  }
+
+  /// Advance to recording state (after clipboard copy is done)
+  void startRecording() {
+    if (_state != CommandState.copying) return;
+    _state = CommandState.recording;
+    onStateChange(_state, 'Listening for command...');
+  }
+
+  /// Advance to processing state (after voice is captured)
+  void startProcessing(String voiceCommand) {
+    if (_state != CommandState.recording) return;
+    _state = CommandState.processing;
+    onStateChange(_state, 'AI processing: "$voiceCommand"');
+  }
+
+  /// Advance to pasting state (after LLM returns result)
+  void startPasting() {
+    if (_state != CommandState.processing) return;
+    _state = CommandState.pasting;
+    onStateChange(_state, 'Pasting result...');
+  }
+
+  /// Return to idle
+  void complete() {
+    _state = CommandState.idle;
+    onStateChange(_state, 'Command complete ✓');
+  }
+
+  /// Cancel and return to idle
+  void cancel(String reason) {
+    _state = CommandState.idle;
+    onStateChange(_state, reason);
+  }
+
+  void dispose() {}
+}

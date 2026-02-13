@@ -19,3 +19,4 @@ dasp = { version = "0.11", features = ["signal"] }
 parking_lot = "0.12"
 log = "0.4"
 dirs = "4.0"
+ureq = "2.9"

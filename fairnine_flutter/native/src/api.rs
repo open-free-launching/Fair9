@@ -261,6 +261,113 @@ pub fn apply_snippet_expansion(text: &str) -> String {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// AI COMMAND MODE (Ollama LLM Integration)
+// ═══════════════════════════════════════════════════════════════════
+
+const OLLAMA_DEFAULT_URL: &str = "http://localhost:11434/api/generate";
+const OLLAMA_DEFAULT_MODEL: &str = "llama3";
+
+const AI_SYSTEM_PROMPT: &str = r#"You are a text editor. Execute the user's command on the following text. 
+Return ONLY the modified text with no explanation, no markdown formatting, no quotes around it. 
+Just the raw edited text, nothing else."#;
+
+/// Process text through local Ollama LLM with a voice command
+/// selected_text: the text currently highlighted in the user's app
+/// voice_command: what the user said (e.g. "make this a list", "fix grammar")
+/// Returns: the LLM-modified text ready to paste back
+pub fn process_ai_command(selected_text: String, voice_command: String) -> Result<String> {
+    process_ai_command_with_config(
+        selected_text,
+        voice_command,
+        OLLAMA_DEFAULT_URL.to_string(),
+        OLLAMA_DEFAULT_MODEL.to_string(),
+    )
+}
+
+/// Configurable version for testing and custom setups
+pub fn process_ai_command_with_config(
+    selected_text: String,
+    voice_command: String,
+    ollama_url: String,
+    model: String,
+) -> Result<String> {
+    if selected_text.trim().is_empty() {
+        return Err(anyhow!("No text selected — highlight text first"));
+    }
+    if voice_command.trim().is_empty() {
+        return Err(anyhow!("No voice command captured"));
+    }
+
+    let prompt = format!(
+        "Command: {}\n\nText to edit:\n{}",
+        voice_command.trim(),
+        selected_text,
+    );
+
+    // Build JSON body manually (no serde dependency needed)
+    let escaped_system = AI_SYSTEM_PROMPT
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    let escaped_prompt = prompt
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n");
+    let escaped_model = model
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+
+    let body = format!(
+        r#"{{"model":"{}","prompt":"{}","system":"{}","stream":false}}"#,
+        escaped_model, escaped_prompt, escaped_system
+    );
+
+    // HTTP POST to Ollama
+    let response = ureq::post(&ollama_url)
+        .set("Content-Type", "application/json")
+        .send_string(&body);
+
+    match response {
+        Ok(resp) => {
+            let body_str = resp.into_string()
+                .context("Failed to read Ollama response body")?;
+
+            // Extract "response" field from JSON
+            if let Some(response_text) = extract_json_string(&body_str, "response") {
+                let cleaned = response_text.trim().to_string();
+                if cleaned.is_empty() {
+                    Err(anyhow!("LLM returned empty response"))
+                } else {
+                    Ok(cleaned)
+                }
+            } else {
+                Err(anyhow!("Could not parse LLM response: {}", &body_str[..body_str.len().min(200)]))
+            }
+        }
+        Err(e) => {
+            Err(anyhow!(
+                "Ollama connection failed. Is Ollama running? (ollama serve)\nError: {}",
+                e
+            ))
+        }
+    }
+}
+
+/// Check if Ollama is available at the default endpoint
+pub fn check_ollama_status() -> String {
+    match ureq::get("http://localhost:11434/api/tags").call() {
+        Ok(resp) => {
+            let body = resp.into_string().unwrap_or_default();
+            if body.contains("models") {
+                "connected".to_string()
+            } else {
+                "running_no_models".to_string()
+            }
+        }
+        Err(_) => "offline".to_string(),
+    }
+}
 pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
     STATE.is_listening.store(true, Ordering::SeqCst);
     
@@ -685,5 +792,38 @@ mod tests {
         let content = extract_json_string(json, "content");
         assert_eq!(trigger.unwrap(), "insert bio");
         assert_eq!(content.unwrap(), "Hello world");
+    }
+
+    // ══ AI Command Mode Tests ══════════════════════════════════════
+    #[test]
+    fn test_command_rejects_empty_text() {
+        let result = process_ai_command_with_config(
+            "".to_string(),
+            "fix grammar".to_string(),
+            "http://localhost:99999".to_string(), // unreachable port
+            "test".to_string(),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No text selected"));
+    }
+
+    #[test]
+    fn test_command_rejects_empty_command() {
+        let result = process_ai_command_with_config(
+            "Hello world".to_string(),
+            "".to_string(),
+            "http://localhost:99999".to_string(),
+            "test".to_string(),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No voice command"));
+    }
+
+    #[test]
+    fn test_ai_system_prompt_format() {
+        // Verify the system prompt contains key instructions
+        assert!(AI_SYSTEM_PROMPT.contains("text editor"));
+        assert!(AI_SYSTEM_PROMPT.contains("Execute the user's command"));
+        assert!(AI_SYSTEM_PROMPT.contains("ONLY the modified text"));
     }
 }
