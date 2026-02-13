@@ -4,6 +4,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'dart:ui';
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 
 // Mock Bridge for UI Dev without compiled Rust
 // import 'bridge_generated.dart'; 
@@ -11,7 +12,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
-// ... (existing imports)
+const String kAppVersion = '1.0.0';
+const String kGitHubRepo = 'open-free-launching/Fair9';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -49,7 +51,7 @@ Future<bool> _checkModelExists() async {
   
   final appData = Platform.environment['APPDATA'];
   if (appData != null) {
-      final modelPath = '$appData\\OpenFL\\Fair9\\models\\ggml-tiny.en.bin';
+      final modelPath = '$appData\\OpenFL\\Fair9\\models\\ggml-tiny.en-q8_0.bin';
       return File(modelPath).exists();
   }
   return false;
@@ -105,8 +107,8 @@ class _ModelDownloaderState extends State<ModelDownloader> {
       await modelDir.create(recursive: true);
     }
     
-    final modelPath = '${modelDir.path}\\ggml-tiny.en.bin';
-    final url = Uri.parse("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin");
+    final modelPath = '${modelDir.path}\\ggml-tiny.en-q8_0.bin';
+    final url = Uri.parse("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en-q8_0.bin");
 
     final request = http.Request('GET', url);
     final response = await http.Client().send(request);
@@ -179,6 +181,9 @@ class HUDOverlay extends StatefulWidget {
 class _HUDOverlayState extends State<HUDOverlay> with TrayListener, WindowListener {
   String _status = "Ready";
   bool _isRecording = false;
+  bool _updateAvailable = false;
+  String _latestVersion = '';
+  bool _legacyAppMode = false; // Adaptive typing delay
   final StreamController<String> _mockStreamController = StreamController<String>.broadcast();
   Stream<String>? _transcriptionStream;
 
@@ -188,12 +193,38 @@ class _HUDOverlayState extends State<HUDOverlay> with TrayListener, WindowListen
     trayManager.addListener(this);
     windowManager.addListener(this);
     _initTray();
+    _checkForUpdates();
     
     // For real usage:
     // _transcriptionStream = api.createTranscriptionStream();
     // Mocking for UI dev:
     _transcriptionStream = _mockStreamController.stream;
   }
+
+  Future<void> _checkForUpdates() async {
+    try {
+      final response = await http.get(
+        Uri.parse('https://api.github.com/repos/$kGitHubRepo/releases/latest'),
+        headers: {'Accept': 'application/vnd.github.v3+json'},
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final tagName = data['tag_name'] as String? ?? '';
+        final remote = tagName.replaceAll('v', '');
+        if (remote.compareTo(kAppVersion) > 0) {
+          setState(() {
+            _updateAvailable = true;
+            _latestVersion = tagName;
+          });
+        }
+      }
+    } catch (_) { /* Silent fail — no internet is fine */ }
+  }
+
+  /// Adaptive typing delay (10ms default, 30ms for legacy apps)
+  Duration get _typingDelay => _legacyAppMode
+      ? const Duration(milliseconds: 30)
+      : const Duration(milliseconds: 10);
 // ... (rest of HUDOverlay)
 
 
@@ -374,6 +405,31 @@ class _HUDOverlayState extends State<HUDOverlay> with TrayListener, WindowListen
                     
                     const SizedBox(height: 15),
                     
+                    // Update Banner
+                    if (_updateAvailable)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+                        margin: const EdgeInsets.only(bottom: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.blueAccent.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blueAccent.withOpacity(0.4)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.system_update, color: Colors.blueAccent, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Update $_latestVersion available',
+                                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+
                     // Controls
                     SizedBox(
                       width: double.infinity,
@@ -389,6 +445,21 @@ class _HUDOverlayState extends State<HUDOverlay> with TrayListener, WindowListen
                         ),
                         child: Text(_isRecording ? "Stop Listening" : "Start Listening"),
                       ),
+                    ),
+
+                    // Legacy App Toggle
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Legacy App Mode', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                        Switch(
+                          value: _legacyAppMode,
+                          onChanged: (v) => setState(() => _legacyAppMode = v),
+                          activeColor: Colors.blueAccent,
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                      ],
                     ),
                   ],
                 ),

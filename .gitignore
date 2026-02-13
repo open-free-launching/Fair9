@@ -1,11 +1,29 @@
-dist/
-build/
-__pycache__/
-*.spec
+# Binaries & Build Artifacts
 *.exe
+*.bin
 *.zip
 *.dmg
 *.log
+*.spec
+*.o
+*.so
+*.dll
+*.dylib
+
+# Directories
+dist/
+build/
+__pycache__/
+models/
+target/
+.dart_tool/
+
+# IDE & OS
 .DS_Store
 .idea/
 .vscode/
+*.iml
+
+# Environment
+.env
+.env.local

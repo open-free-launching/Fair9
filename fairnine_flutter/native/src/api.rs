@@ -8,6 +8,9 @@ use flutter_rust_bridge::StreamSink;
 use anyhow::{Result, Context, anyhow};
 use lazy_static::lazy_static;
 
+const APP_VERSION: &str = "1.0.0";
+const GITHUB_REPO: &str = "open-free-launching/Fair9";
+
 // Constants
 const VAD_THRESHOLD_RMS: f32 = 0.01; // Adjust based on mic sensitivity
 const SILENCE_DURATION_MS: u128 = 1000; // 1 second silence to finalize/clear?
@@ -38,7 +41,7 @@ fn get_model_path() -> Result<PathBuf> {
     // User said: ~/AppData/Roaming/OpenFL/Fair9/models
     // We will assume a specific model name, e.g., ggml-tiny.en.bin exists there.
     // For now, let's look for 'ggml-tiny.en.bin' inside that path.
-    path.push("ggml-tiny.en.bin");
+    path.push("ggml-tiny.en-q8_0.bin");
     Ok(path)
 }
 
@@ -177,5 +180,27 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
 
 pub fn stop_listening() -> Result<()> {
     STATE.is_listening.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Check GitHub for newer release tags
+pub fn check_for_updates() -> Result<String> {
+    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    // NOTE: Requires a blocking HTTP client like `ureq` or `reqwest` (blocking).
+    // For now, return the current version. The Flutter side handles the actual check.
+    Ok(APP_VERSION.to_string())
+}
+
+/// Inject text with adaptive delay between characters
+/// delay_ms: 10 for normal apps, 30 for legacy/slow apps
+pub fn inject_text(text: String, delay_ms: u64) -> Result<()> {
+    // This would use platform-specific APIs (e.g., SendInput on Windows)
+    // to simulate keyboard input with a per-character delay.
+    for ch in text.chars() {
+        // Platform-specific key simulation would go here
+        // e.g., windows::Win32::UI::Input::KeyboardAndMouse::SendInput
+        let _ = ch; // Placeholder
+        thread::sleep(std::time::Duration::from_millis(delay_ms));
+    }
     Ok(())
 }
