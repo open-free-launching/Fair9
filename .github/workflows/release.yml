@@ -5,10 +5,10 @@ on:
     tags:
       - 'v*'
 
-
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -36,6 +36,12 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable macOS Desktop Support
+        if: runner.os == 'macOS'
+        run: |
+          flutter config --enable-macos-desktop
+          flutter create --platforms=macos .
 
       - name: Install Dependencies
         run: flutter pub get
