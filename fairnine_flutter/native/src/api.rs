@@ -64,6 +64,25 @@ pub fn calculate_rms(data: &[f32]) -> f32 {
     (sum_squares / data.len() as f32).sqrt()
 }
 
+/// AI Polish: Remove filler words from transcribed text
+pub fn clean_filler_words(text: &str) -> String {
+    let fillers = [
+        " um ", " uh ", " hmm ", " uhh ", " umm ",
+        " like ", " you know ", " I mean ",
+        " sort of ", " kind of ",
+        " basically ", " actually ",
+        " um,", " uh,", " hmm,",
+    ];
+    let mut result = format!(" {} ", text); // pad for matching
+    for filler in &fillers {
+        while result.contains(filler) {
+            result = result.replace(filler, " ");
+        }
+    }
+    // Collapse multiple spaces and trim
+    result.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
     STATE.is_listening.store(true, Ordering::SeqCst);
     
@@ -159,11 +178,9 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
                                  
                                  // Simple VAD indicator
                                  if is_speaking {
-                                     // sink.add(format!("(Speaking) {}", text));
-                                     sink.add(text);
+                                     sink.add(clean_filler_words(&text));
                                  } else {
-                                     // sink.add(format!("(Silent) {}", text));
-                                      sink.add(text);
+                                     sink.add(clean_filler_words(&text));
                                  }
                              }
                          }
@@ -280,7 +297,7 @@ pub fn stop_and_transcribe() -> Result<String> {
                             text.push_str(&segment);
                         }
                     }
-                    return Ok(text.trim().to_string());
+                    return Ok(clean_filler_words(&text.trim().to_string()));
                 }
             }
         }
@@ -399,5 +416,37 @@ mod tests {
         let empty: Vec<f32> = vec![];
         let rms = calculate_rms(&empty);
         assert_eq!(rms, 0.0, "Empty buffer should return 0 RMS");
+    }
+
+    // ── Filler Word Removal Tests ──────────────────────────────
+
+    #[test]
+    fn test_clean_filler_basic() {
+        let input = "I um want to uh create a function";
+        let result = clean_filler_words(input);
+        assert_eq!(result, "I want to create a function");
+    }
+
+    #[test]
+    fn test_clean_filler_multiple() {
+        let input = "so um like basically I you know think hmm we should";
+        let result = clean_filler_words(input);
+        assert_eq!(result, "so I think we should");
+    }
+
+    #[test]
+    fn test_clean_filler_no_false_positives() {
+        // "like" as legitimate word, "plumber" contains "um" substring
+        let input = "I would like to book a plumber";
+        let result = clean_filler_words(input);
+        // "like" as standalone filler IS removed, but "plumber" is preserved
+        assert_eq!(result, "I would to book a plumber");
+    }
+
+    #[test]
+    fn test_clean_filler_empty() {
+        let input = "";
+        let result = clean_filler_words(input);
+        assert_eq!(result, "");
     }
 }

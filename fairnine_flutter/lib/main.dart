@@ -209,6 +209,7 @@ class _HUDOverlayState extends State<HUDOverlay>
   String _latestVersion = '';
   bool _legacyAppMode = false;
   bool _settingsOpen = false;
+  bool _isClickThrough = false;
   STTMode _sttMode = STTMode.streaming;
   String _activeModelName = 'English — Fast';
   int _activeModelIndex = 0;
@@ -319,15 +320,28 @@ class _HUDOverlayState extends State<HUDOverlay>
   }
 
   // ── Settings Toggle ─────────────────────────────────────────────
+  /// Toggle click-through mode based on current activity
+  void _updateClickThrough() {
+    final shouldBeInteractive = _isRecording || _settingsOpen;
+    if (_isClickThrough == shouldBeInteractive) {
+      _isClickThrough = !shouldBeInteractive;
+      windowManager.setIgnoreMouseEvents(!shouldBeInteractive, forward: true);
+    }
+  }
+
   void _toggleSettings() {
     setState(() => _settingsOpen = !_settingsOpen);
     if (_settingsOpen) {
       _settingsSlideController.forward();
-      // Expand window for settings panel
       windowManager.setSize(const Size(380, 520));
+      windowManager.setIgnoreMouseEvents(false); // Make interactive
     } else {
       _settingsSlideController.reverse();
       windowManager.setSize(const Size(380, 290));
+      // Only go click-through if not recording
+      if (!_isRecording) {
+        windowManager.setIgnoreMouseEvents(true, forward: true);
+      }
     }
   }
 
@@ -336,6 +350,7 @@ class _HUDOverlayState extends State<HUDOverlay>
     setState(() => _isRecording = !_isRecording);
 
     if (_isRecording) {
+      windowManager.setIgnoreMouseEvents(false); // Make interactive while recording
       setState(() {
         _status = _sttMode == STTMode.batch ? "Recording..." : "Listening...";
         _batchResult = '';
@@ -344,10 +359,7 @@ class _HUDOverlayState extends State<HUDOverlay>
       if (_sttMode == STTMode.streaming) _mockStreaming();
     } else {
       if (_sttMode == STTMode.batch) {
-        // Simulate batch transcription result
-        setState(() {
-          _status = "Processing...";
-        });
+        setState(() => _status = "Processing...");
         Future.delayed(const Duration(milliseconds: 800), () {
           if (mounted) {
             setState(() {
@@ -359,6 +371,10 @@ class _HUDOverlayState extends State<HUDOverlay>
       } else {
         setState(() => _status = "Ready");
         if (_ghostText.isNotEmpty) _solidifyGhostText();
+      }
+      // Restore click-through if settings are also closed
+      if (!_settingsOpen) {
+        windowManager.setIgnoreMouseEvents(true, forward: true);
       }
     }
   }
