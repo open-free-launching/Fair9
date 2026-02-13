@@ -46,7 +46,9 @@ jobs:
         run: brew install llvm
 
       - name: Install flutter_rust_bridge_codegen
-        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
+        run: |
+          cargo install flutter_rust_bridge_codegen --version 1.80.1
+          cargo install cbindgen
 
       - name: Enable macOS Desktop Support
         if: runner.os == 'macOS'
@@ -58,6 +60,7 @@ jobs:
         run: flutter pub get
 
       - name: Run Codegen
+        shell: bash
         run: |
           mkdir -p lib
           mkdir -p native/src
