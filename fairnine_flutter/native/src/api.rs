@@ -204,3 +204,94 @@ pub fn inject_text(text: String, delay_ms: u64) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn test_inject_text_normal_mode() {
+        let text = "Hello Fair9 Test".to_string();
+        let delay_ms = 10; // Normal mode
+
+        let start = Instant::now();
+        let result = inject_text(text.clone(), delay_ms);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_ok(), "inject_text should succeed");
+
+        let expected_min = std::time::Duration::from_millis(delay_ms * text.len() as u64);
+        assert!(
+            elapsed >= expected_min * 80 / 100, // Allow 20% timing tolerance
+            "Normal mode: elapsed {:?} should be >= ~{:?}",
+            elapsed, expected_min
+        );
+    }
+
+    #[test]
+    fn test_inject_text_legacy_mode_slower() {
+        let text = "SpeedTest".to_string();
+
+        let start_normal = Instant::now();
+        inject_text(text.clone(), 10).unwrap();
+        let normal_elapsed = start_normal.elapsed();
+
+        let start_legacy = Instant::now();
+        inject_text(text.clone(), 30).unwrap();
+        let legacy_elapsed = start_legacy.elapsed();
+
+        assert!(
+            legacy_elapsed > normal_elapsed,
+            "Legacy mode ({:?}) should be slower than normal mode ({:?})",
+            legacy_elapsed, normal_elapsed
+        );
+    }
+
+    #[test]
+    fn test_inject_text_empty_string() {
+        let start = Instant::now();
+        let result = inject_text("".to_string(), 10);
+        let elapsed = start.elapsed();
+
+        assert!(result.is_ok(), "Empty string should succeed");
+        assert!(
+            elapsed < std::time::Duration::from_millis(5),
+            "Empty string should complete near-instantly, took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_inject_text_unicode() {
+        let result = inject_text("Fair9 ✓ héllo 日本".to_string(), 1);
+        assert!(result.is_ok(), "Unicode injection should succeed");
+    }
+
+    #[test]
+    fn test_check_for_updates_returns_version() {
+        let version = check_for_updates().unwrap();
+        assert_eq!(version, APP_VERSION, "Should return current version");
+    }
+
+    #[test]
+    fn test_calculate_rms_silent() {
+        let silent = vec![0.0f32; 1600];
+        let rms = calculate_rms(&silent);
+        assert_eq!(rms, 0.0, "Silent audio should have 0 RMS");
+    }
+
+    #[test]
+    fn test_calculate_rms_loud() {
+        let loud = vec![1.0f32; 1600];
+        let rms = calculate_rms(&loud);
+        assert!((rms - 1.0).abs() < 0.001, "Constant 1.0 audio should have RMS ~1.0");
+    }
+
+    #[test]
+    fn test_calculate_rms_empty() {
+        let empty: Vec<f32> = vec![];
+        let rms = calculate_rms(&empty);
+        assert_eq!(rms, 0.0, "Empty buffer should return 0 RMS");
+    }
+}
