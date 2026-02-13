@@ -1,0 +1,11 @@
+dist/
+build/
+__pycache__/
+*.spec
+*.exe
+*.zip
+*.dmg
+*.log
+.DS_Store
+.idea/
+.vscode/
