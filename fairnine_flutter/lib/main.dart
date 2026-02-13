@@ -15,7 +15,7 @@ import 'package:path_provider/path_provider.dart';
 // ═══════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════
-const String kAppVersion = '1.1.0';
+const String kAppVersion = '1.2.1';
 const String kGitHubRepo = 'open-free-launching/Fair9';
 
 // Neon palette
@@ -246,6 +246,7 @@ class _HUDOverlayState extends State<HUDOverlay>
 
   // Whisper Mode
   bool _whisperMode = false;
+  bool _semanticCorrection = false;
 
   final StreamController<String> _mockStreamController = StreamController<String>.broadcast();
   Stream<String>? _transcriptionStream;
@@ -1074,6 +1075,38 @@ class _HUDOverlayState extends State<HUDOverlay>
             setState(() => _whisperMode = val);
             // Call Rust to update mode
             api.setWhisperMode(enabled: val);
+          },
+        ),
+      ]),
+      const SizedBox(height: 18),
+
+      // SEMANTIC CORRECTION
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text('Semantic Correction', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            if (_semanticCorrection)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: kNeonTeal.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: kNeonTeal.withOpacity(0.4)),
+                ),
+                child: const Text('AUTO-REPAIR', style: TextStyle(color: kNeonTeal, fontSize: 7, fontWeight: FontWeight.w800)),
+              ),
+          ]),
+          const SizedBox(height: 2),
+          Text('Fixes "no wait, I meant..." on the fly', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 9)),
+        ]),
+        CupertinoSwitch(
+          value: _semanticCorrection,
+          activeColor: kNeonTeal,
+          trackColor: Colors.white.withOpacity(0.08),
+          onChanged: (val) {
+            setState(() => _semanticCorrection = val);
+            api.setSemanticCorrection(enabled: val);
           },
         ),
       ]),

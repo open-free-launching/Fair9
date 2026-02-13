@@ -9,7 +9,7 @@ use flutter_rust_bridge::StreamSink;
 use anyhow::{Result, Context, anyhow};
 use lazy_static::lazy_static;
 
-const APP_VERSION: &str = "1.2.0";
+const APP_VERSION: &str = "1.2.1";
 const GITHUB_REPO: &str = "open-free-launching/Fair9";
 
 /// Voice Snippet: trigger phrase → expanded content
@@ -40,6 +40,12 @@ lazy_static! {
     });
     static ref SNIPPETS: Mutex<Vec<VoiceSnippet>> = Mutex::new(Vec::new());
     static ref WHISPER_MODE: AtomicBool = AtomicBool::new(false);
+    static ref SEMANTIC_CORRECTION: AtomicBool = AtomicBool::new(false);
+}
+
+pub fn set_semantic_correction(enabled: bool) -> Result<()> {
+    SEMANTIC_CORRECTION.store(enabled, Ordering::SeqCst);
+    Ok(())
 }
 
 pub fn set_whisper_mode(enabled: bool) -> Result<()> {
@@ -278,6 +284,66 @@ const AI_SYSTEM_PROMPT: &str = r#"You are a text editor. Execute the user's comm
 Return ONLY the modified text with no explanation, no markdown formatting, no quotes around it. 
 Just the raw edited text, nothing else."#;
 
+const CORRECTION_SYSTEM_PROMPT: &str = r#"You are a transcription cleaner. The user made a verbal correction (e.g., "no wait", "actually", "I meant"). 
+Analyze the text and output ONLY the final intended sentence, removing the false start and the correction phrase entirely. 
+Return ONLY the cleaned text, nothing else."#;
+
+/// Internal helper for Ollama JSON API (manual encoding to avoid serde dependency)
+fn call_ollama_endpoint(
+    ollama_url: &str,
+    model: &str,
+    system: &str,
+    prompt: &str,
+) -> Result<String> {
+    let escaped_system = system.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let escaped_prompt = prompt.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let escaped_model = model.replace('\\', "\\\\").replace('"', "\\\"");
+
+    let body = format!(
+        r#"{{"model":"{}","prompt":"{}","system":"{}","stream":false}}"#,
+        escaped_model, escaped_prompt, escaped_system
+    );
+
+    let response = ureq::post(ollama_url)
+        .set("Content-Type", "application/json")
+        .send_string(&body);
+
+    match response {
+        Ok(resp) => {
+            let body_str = resp.into_string().context("Failed to read Ollama response")?;
+            if let Some(res) = extract_json_string(&body_str, "response") {
+                let cleaned = res.trim().to_string();
+                if cleaned.is_empty() { Err(anyhow!("Empty LLM response")) } else { Ok(cleaned) }
+            } else {
+                Err(anyhow!("Could not parse LLM response"))
+            }
+        }
+        Err(e) => Err(anyhow!("Ollama error: {}", e)),
+    }
+}
+
+pub fn apply_semantic_correction(text: &str) -> String {
+    if !SEMANTIC_CORRECTION.load(Ordering::SeqCst) || text.trim().is_empty() {
+        return text.to_string();
+    }
+
+    let lower = text.to_lowercase();
+    let keywords = ["no wait", "actually", "i meant", "correction"];
+    if !keywords.iter().any(|&k| lower.contains(k)) {
+        return text.to_string();
+    }
+
+    match call_ollama_endpoint(
+        OLLAMA_DEFAULT_URL,
+        OLLAMA_DEFAULT_MODEL,
+        CORRECTION_SYSTEM_PROMPT,
+        text,
+    ) {
+        Ok(cleaned) => cleaned,
+        Err(_) => text.to_string(), // Fallback to original
+    }
+}
+
 /// Process text through local Ollama LLM with a voice command
 /// selected_text: the text currently highlighted in the user's app
 /// voice_command: what the user said (e.g. "make this a list", "fix grammar")
@@ -311,53 +377,7 @@ pub fn process_ai_command_with_config(
         selected_text,
     );
 
-    // Build JSON body manually (no serde dependency needed)
-    let escaped_system = AI_SYSTEM_PROMPT
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n");
-    let escaped_prompt = prompt
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n");
-    let escaped_model = model
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
-
-    let body = format!(
-        r#"{{"model":"{}","prompt":"{}","system":"{}","stream":false}}"#,
-        escaped_model, escaped_prompt, escaped_system
-    );
-
-    // HTTP POST to Ollama
-    let response = ureq::post(&ollama_url)
-        .set("Content-Type", "application/json")
-        .send_string(&body);
-
-    match response {
-        Ok(resp) => {
-            let body_str = resp.into_string()
-                .context("Failed to read Ollama response body")?;
-
-            // Extract "response" field from JSON
-            if let Some(response_text) = extract_json_string(&body_str, "response") {
-                let cleaned = response_text.trim().to_string();
-                if cleaned.is_empty() {
-                    Err(anyhow!("LLM returned empty response"))
-                } else {
-                    Ok(cleaned)
-                }
-            } else {
-                Err(anyhow!("Could not parse LLM response: {}", &body_str[..body_str.len().min(200)]))
-            }
-        }
-        Err(e) => {
-            Err(anyhow!(
-                "Ollama connection failed. Is Ollama running? (ollama serve)\nError: {}",
-                e
-            ))
-        }
-    }
+    call_ollama_endpoint(&ollama_url, &model, AI_SYSTEM_PROMPT, &prompt)
 }
 
 /// Check if Ollama is available at the default endpoint
@@ -492,13 +512,14 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
                                      }
                                  }
                                  
-                                 // Pipeline: raw → filler removal → snippet expansion
+                                 // Pipeline: raw → filler removal → semantic correction → snippet expansion
                                  let cleaned = clean_filler_words(&text);
-                                 let final_text = apply_snippet_expansion(&cleaned);
+                                 let corrected = apply_semantic_correction(&cleaned);
+                                 let final_text = apply_snippet_expansion(&corrected);
                                  if is_speaking {
                                      sink.add(final_text);
                                  } else {
-                                     sink.add(apply_snippet_expansion(&clean_filler_words(&text)));
+                                     sink.add(apply_snippet_expansion(&apply_semantic_correction(&clean_filler_words(&text))));
                                  }
                              }
                          }
@@ -872,5 +893,29 @@ mod tests {
         
         set_whisper_mode(false).unwrap();
         assert_eq!(WHISPER_MODE.load(Ordering::SeqCst), false);
+    }
+
+    #[test]
+    fn test_set_semantic_correction() {
+        set_semantic_correction(true).unwrap();
+        assert!(SEMANTIC_CORRECTION.load(Ordering::SeqCst));
+        set_semantic_correction(false).unwrap();
+        assert!(!SEMANTIC_CORRECTION.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_apply_semantic_correction_no_keywords() {
+        set_semantic_correction(true).unwrap();
+        let input = "Today is a beautiful day.";
+        let result = apply_semantic_correction(input);
+        assert_eq!(result, input, "Should return original text if no correction keywords found");
+    }
+
+    #[test]
+    fn test_apply_semantic_correction_disabled() {
+        set_semantic_correction(false).unwrap();
+        let input = "Actually, no wait, I meant this.";
+        let result = apply_semantic_correction(input);
+        assert_eq!(result, input, "Should return original text if feature is disabled");
     }
 }
