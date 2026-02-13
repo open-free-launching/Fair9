@@ -244,6 +244,9 @@ class _HUDOverlayState extends State<HUDOverlay>
   String _commandVoiceInput = '';
   String _selectedText = '';
 
+  // Whisper Mode
+  bool _whisperMode = false;
+
   final StreamController<String> _mockStreamController = StreamController<String>.broadcast();
   Stream<String>? _transcriptionStream;
 
@@ -915,7 +918,11 @@ class _HUDOverlayState extends State<HUDOverlay>
                         ? AnimatedBuilder(
                             animation: _waveController,
                             builder: (_, __) => CustomPaint(
-                              painter: _KineticWaveformPainter(progress: _waveController.value, isRecording: true),
+                              painter: _KineticWaveformPainter(
+                                progress: _waveController.value,
+                                isRecording: true,
+                                whisperMode: _whisperMode,
+                              ),
                               size: Size.infinite,
                             ),
                           )
@@ -1037,6 +1044,40 @@ class _HUDOverlayState extends State<HUDOverlay>
           ),
         ]),
       ),
+      const SizedBox(height: 18),
+
+      // WHISPER MODE TOGGLE
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Text('Whisper Mode', style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 12, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 6),
+            if (_whisperMode)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: kNeonPurple.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: kNeonPurple.withOpacity(0.4)),
+                ),
+                child: const Text('ENHANCED', style: TextStyle(color: kNeonPurple, fontSize: 7, fontWeight: FontWeight.w800)),
+              ),
+          ]),
+          const SizedBox(height: 2),
+          Text('High gain + Background filter for quiet voices', style: TextStyle(color: Colors.white.withOpacity(0.3), fontSize: 9)),
+        ]),
+        CupertinoSwitch(
+          value: _whisperMode,
+          activeColor: kNeonPurple,
+          trackColor: Colors.white.withOpacity(0.08),
+          onChanged: (val) {
+            setState(() => _whisperMode = val);
+            // Call Rust to update mode
+            api.setWhisperMode(enabled: val);
+          },
+        ),
+      ]),
+      const SizedBox(height: 18),
       const SizedBox(height: 14),
 
       // LEGACY MODE
@@ -1473,7 +1514,8 @@ class _SnippetTextField extends StatelessWidget {
 class _KineticWaveformPainter extends CustomPainter {
   final double progress;
   final bool isRecording;
-  _KineticWaveformPainter({required this.progress, required this.isRecording});
+  final bool whisperMode;
+  _KineticWaveformPainter({required this.progress, required this.isRecording, this.whisperMode = false});
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1501,6 +1543,16 @@ class _KineticWaveformPainter extends CustomPainter {
       );
       canvas.drawRRect(rrect, paint);
       canvas.drawRRect(rrect, Paint()..color = colors[i].withOpacity(0.12)..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6));
+
+      // Whisper Mode Glow
+      if (whisperMode && isRecording) {
+        canvas.drawRRect(
+          rrect,
+          Paint()
+            ..color = kNeonPurple.withOpacity(0.15)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
+        );
+      }
     }
   }
 

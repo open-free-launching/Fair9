@@ -39,6 +39,12 @@ lazy_static! {
         model_ctx: Mutex::new(None),
     });
     static ref SNIPPETS: Mutex<Vec<VoiceSnippet>> = Mutex::new(Vec::new());
+    static ref WHISPER_MODE: AtomicBool = AtomicBool::new(false);
+}
+
+pub fn set_whisper_mode(enabled: bool) -> Result<()> {
+    WHISPER_MODE.store(enabled, Ordering::SeqCst);
+    Ok(())
 }
 
 fn get_model_path() -> Result<PathBuf> {
@@ -391,7 +397,27 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
         move |data: &[f32], _: &_| {
             if STATE.is_listening.load(Ordering::SeqCst) {
                 let mut buffer = STATE.audio_buffer.lock().unwrap();
-                buffer.extend_from_slice(data);
+                let is_whisper = WHISPER_MODE.load(Ordering::SeqCst);
+                
+                if is_whisper {
+                    // DSP: +15dB Gain Boost (multiplier ≈ 5.62) + High-Pass Filter (Simple RC)
+                    static mut LAST_IN: f32 = 0.0;
+                    static mut LAST_OUT: f32 = 0.0;
+                    let alpha = 0.95; // Cutoff approx 120Hz at 16kHz
+                    
+                    for &sample in data {
+                        unsafe {
+                            // High-pass filter
+                            let out = alpha * (LAST_OUT + sample - LAST_IN);
+                            LAST_IN = sample;
+                            LAST_OUT = out;
+                            // Apply +15dB Gain
+                            buffer.push(out * 5.62);
+                        }
+                    }
+                } else {
+                    buffer.extend_from_slice(data);
+                }
             }
         },
         err_fn,
@@ -446,6 +472,11 @@ pub fn create_transcription_stream(sink: StreamSink<String>) -> Result<()> {
                      params.set_print_realtime(false);
                      params.set_print_timestamps(false);
                      params.set_n_threads(4);
+
+                     if WHISPER_MODE.load(Ordering::SeqCst) {
+                         // Higher sensitivity for hushed voices
+                         params.set_no_speech_thold(0.1); 
+                     }
                      
                      // Token level timestamp? 
                      // params.set_token_timestamps(true);
@@ -825,5 +856,21 @@ mod tests {
         assert!(AI_SYSTEM_PROMPT.contains("text editor"));
         assert!(AI_SYSTEM_PROMPT.contains("Execute the user's command"));
         assert!(AI_SYSTEM_PROMPT.contains("ONLY the modified text"));
+    }
+
+    #[test]
+    fn test_whisper_mode_params() {
+        set_whisper_mode(true).unwrap();
+        assert!(WHISPER_MODE.load(Ordering::SeqCst));
+        
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        if WHISPER_MODE.load(Ordering::SeqCst) {
+            params.set_no_speech_thold(0.1);
+        }
+        // Verification of state change
+        assert_eq!(WHISPER_MODE.load(Ordering::SeqCst), true);
+        
+        set_whisper_mode(false).unwrap();
+        assert_eq!(WHISPER_MODE.load(Ordering::SeqCst), false);
     }
 }
