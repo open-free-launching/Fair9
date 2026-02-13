@@ -183,6 +183,112 @@ pub fn stop_listening() -> Result<()> {
     Ok(())
 }
 
+/// Transcription mode: Batch (process on stop) vs Streaming (live 400ms chunks)
+#[derive(Clone, Copy, PartialEq)]
+pub enum TranscriptionMode {
+    Batch,     // Mode A: Buffer all audio → transcribe on hotkey release
+    Streaming, // Mode B: Live 400ms chunks → real-time text
+}
+
+static CURRENT_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1); // 0=Batch, 1=Streaming
+
+pub fn set_transcription_mode(batch: bool) -> Result<()> {
+    CURRENT_MODE.store(if batch { 0 } else { 1 }, Ordering::SeqCst);
+    Ok(())
+}
+
+pub fn get_transcription_mode() -> String {
+    if CURRENT_MODE.load(Ordering::SeqCst) == 0 {
+        "batch".to_string()
+    } else {
+        "streaming".to_string()
+    }
+}
+
+/// Mode A: Batch transcription — records audio, transcribes on stop
+/// Call start_batch_recording() to begin, stop_and_transcribe() to get result
+pub fn start_batch_recording() -> Result<()> {
+    STATE.is_listening.store(true, Ordering::SeqCst);
+    {
+        let mut buffer = STATE.audio_buffer.lock().unwrap();
+        buffer.clear();
+    }
+
+    let host = cpal::default_host();
+    let device = host.default_input_device().context("no input device")?;
+    let config = device.default_input_config().context("no default config")?;
+
+    let err_fn = move |err| {
+        eprintln!("batch recording error: {}", err);
+    };
+
+    let stream = device.build_input_stream(
+        &config.into(),
+        move |data: &[f32], _: &_| {
+            if STATE.is_listening.load(Ordering::SeqCst) {
+                let mut buffer = STATE.audio_buffer.lock().unwrap();
+                buffer.extend_from_slice(data);
+            }
+        },
+        err_fn,
+        None,
+    )?;
+
+    stream.play()?;
+
+    // Keep stream alive in a thread until stopped
+    thread::spawn(move || {
+        while STATE.is_listening.load(Ordering::SeqCst) {
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
+        drop(stream);
+    });
+
+    Ok(())
+}
+
+/// Stop batch recording and transcribe the full buffer
+pub fn stop_and_transcribe() -> Result<String> {
+    STATE.is_listening.store(false, Ordering::SeqCst);
+    thread::sleep(std::time::Duration::from_millis(100)); // Let stream drain
+
+    let buffer_snapshot = {
+        let guard = STATE.audio_buffer.lock().unwrap();
+        guard.clone()
+    };
+
+    if buffer_snapshot.is_empty() {
+        return Ok(String::new());
+    }
+
+    let mut guard = STATE.model_ctx.lock().unwrap();
+    if let Some(ctx) = guard.as_mut() {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some("en"));
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_n_threads(4);
+
+        if let Ok(mut state) = ctx.create_state() {
+            if state.full(params, &buffer_snapshot[..]).is_ok() {
+                if let Ok(num_segments) = state.full_n_segments() {
+                    let mut text = String::new();
+                    for i in 0..num_segments {
+                        if let Ok(segment) = state.full_get_segment_text(i) {
+                            text.push_str(&segment);
+                        }
+                    }
+                    return Ok(text.trim().to_string());
+                }
+            }
+        }
+    }
+
+    Err(anyhow!("Batch transcription failed — model not loaded"))
+}
+
 /// Check GitHub for newer release tags
 pub fn check_for_updates() -> Result<String> {
     let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
