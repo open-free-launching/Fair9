@@ -11,7 +11,7 @@ use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-const APP_VERSION: &str = "1.2.8";
+const APP_VERSION: &str = "1.2.9";
 const GITHUB_REPO: &str = "open-free-launching/Fair9";
 
 /// Voice Snippet: trigger phrase → expanded content
