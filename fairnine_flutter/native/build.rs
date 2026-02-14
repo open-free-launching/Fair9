@@ -1,6 +1,3 @@
-use flutter_rust_bridge_codegen::codegen;
-use flutter_rust_bridge_codegen::config::RawOpts;
-
 fn main() {
     // Generate Dart/Rust glue code
     // This normally runs via 'flutter_rust_bridge_codegen' CLI

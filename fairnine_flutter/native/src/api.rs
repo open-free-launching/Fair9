@@ -9,7 +9,7 @@ use flutter_rust_bridge::StreamSink;
 use anyhow::{Result, Context, anyhow};
 use lazy_static::lazy_static;
 
-const APP_VERSION: &str = "1.2.4";
+const APP_VERSION: &str = "1.2.5";
 const GITHUB_REPO: &str = "open-free-launching/Fair9";
 
 /// Voice Snippet: trigger phrase → expanded content
@@ -102,7 +102,7 @@ pub fn inject_text(text: String, delay_ms: u64) -> Result<()> {
 
 /// AI Polish: Remove filler words from transcribed text
 /// Implements a smarter removal strategy to avoid false positives
-pub fn clean_filler_words(text: &str) -> String {
+pub fn clean_filler_words(text: String) -> String {
     // List of filler words/phrases to remove
     // We use a more conservative list to avoid removing real words
     let fillers = [

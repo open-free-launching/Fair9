@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Fair9"
-#define MyAppVersion "1.2.4"
+#define MyAppVersion "1.2.5"
 #define MyAppPublisher "OpenFL"
 #define MyAppURL "https://github.com/OpenFL/Fair9"
 #define MyAppExeName "fairnine_flutter.exe"
@@ -23,7 +23,7 @@ DisableProgramGroupPage=yes
 ; Remove the following line to run in administrative install mode (install for all users.)
 PrivilegesRequired=lowest
 OutputDir=installer
-OutputBaseFilename=Fair9_Setup_v1.2.4
+OutputBaseFilename=Fair9_Setup_v1.2.5
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
