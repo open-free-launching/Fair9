@@ -9,7 +9,7 @@ use flutter_rust_bridge::StreamSink;
 use anyhow::{Result, Context, anyhow};
 use lazy_static::lazy_static;
 
-const APP_VERSION: &str = "1.2.5";
+const APP_VERSION: &str = "1.2.6";
 const GITHUB_REPO: &str = "open-free-launching/Fair9";
 
 /// Voice Snippet: trigger phrase → expanded content

@@ -12,11 +12,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: Fair9_Setup_v1.2.3.exe
+            artifact: Fair9_Setup_v1.2.6.exe
             build_cmd: flutter build windows --release
             output_path: build/windows/x64/runner/Release/
           - os: macos-latest
-            artifact: Fair9_v1.2.3.dmg
+            artifact: Fair9_v1.2.6.dmg
             build_cmd: flutter build macos --release
             output_path: build/macos/Build/Products/Release/
 
@@ -95,7 +95,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-release
-          path: fairnine_flutter/installer/Fair9_Setup_v1.2.3.exe
+          path: fairnine_flutter/installer/Fair9_Setup_v1.2.6.exe
 
       # --- macOS: Create DMG ---
       - name: Package macOS DMG
