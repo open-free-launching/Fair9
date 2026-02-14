@@ -1207,7 +1207,7 @@ class _HUDOverlayState extends State<HUDOverlay>
             border: Border.all(color: (_ollamaStatus == 'connected' ? kNeonPink : Colors.white).withOpacity(0.15)),
           ),
           child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Icon(CupertinoIcons.wand_and_stars, size: 13, color: _ollamaStatus == 'connected' ? Colors.white : Colors.white.withOpacity(0.15)),
+            Icon(CupertinoIcons.sparkles, size: 13, color: _ollamaStatus == 'connected' ? Colors.white : Colors.white.withOpacity(0.15)),
             const SizedBox(width: 6),
             Text(
               _commandMode ? _commandStatus : 'Activate Command Mode',
